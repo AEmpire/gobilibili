@@ -2,6 +2,7 @@ package gobilibili
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -76,7 +77,17 @@ type roomInitResult struct {
 	Msg     string `json:"msg"`
 }
 
-func getRealRoomID(rid int) (realID int, err error) {
+type UserInfoResult struct {
+	Code int `json:"code"`
+	Data struct {
+		Mid  int    `json:"mid"`
+		Name string `json:"name"`
+	} `json:"data"`
+	Message string `json:"message"`
+	Msg     string `json:"msg"`
+}
+
+func GetRealRoomID(rid int) (realID int, mid int, err error) {
 	resp, err := http.Get(fmt.Sprintf("http://api.live.bilibili.com/room/v1/Room/room_init?id=%d", rid))
 	if err != nil {
 		return
@@ -91,9 +102,31 @@ func getRealRoomID(rid int) (realID int, err error) {
 		return
 	}
 	if res.Code == 0 {
-		return res.Data.RoomID, nil
+		return res.Data.RoomID, res.Data.UID, nil
 	}
-	return 0, fmt.Errorf(res.Message)
+	return 0, 0, fmt.Errorf(res.Message)
+}
+
+func GetRoomOwner(mid int) (name string, err error) {
+	resp, err := http.Get(fmt.Sprintf("https://api.bilibili.com/x/space/acc/info?mid=%d", mid))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var res UserInfoResult
+	jbytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	if err = json.Unmarshal(jbytes, &res); err != nil {
+		return
+	}
+	if res.Code == 0 {
+		return res.Data.Name, nil
+	}
+
+	return "", fmt.Errorf(res.Message)
 }
 
 // BiliBiliClient define
@@ -106,6 +139,7 @@ type BiliBiliClient struct {
 	uid             int
 	handlerMap      map[CmdType]([]Handler)
 	connected       bool
+	Name            string
 }
 
 func NewBiliBiliClient() *BiliBiliClient {
@@ -132,10 +166,20 @@ func (bili *BiliBiliClient) RegHandleFunc(cmd CmdType, hfunc HandleFunc) {
 	bili.RegHandler(cmd, hfunc)
 }
 
+func (bili *BiliBiliClient) Disconnect() {
+	bili.connected = false
+	return
+}
+
 // ConnectServer define
 func (bili *BiliBiliClient) ConnectServer(roomID int) error {
 	log.Println("Getting real room ID ....")
-	roomID, err := getRealRoomID(roomID)
+	roomID, mid, err := GetRealRoomID(roomID)
+	if err != nil {
+		return err
+	}
+	log.Println("Getting user name ....")
+	uname, err := GetRoomOwner(mid)
 	if err != nil {
 		return err
 	}
@@ -147,8 +191,12 @@ func (bili *BiliBiliClient) ConnectServer(roomID int) error {
 	}
 	bili.serverConn = dstConn
 	bili.roomID = roomID
+	bili.Name = uname
 	log.Println("弹幕链接中。。。")
-	bili.SendJoinChannel(roomID)
+	if err := bili.SendJoinChannel(roomID); err != nil {
+		log.Println("err")
+		return err
+	}
 	bili.connected = true
 	go bili.heartbeatLoop()
 	return bili.receiveMessageLoop()
@@ -212,7 +260,11 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 		buf := make([]byte, 4)
 		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
 		expr := binary.BigEndian.Uint32(buf)
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
+		buf = make([]byte, 2)
+		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 2))
+		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 2))
+		ver := binary.BigEndian.Uint16(buf)
+		buf = make([]byte, 4)
 		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
 		num := binary.BigEndian.Uint32(buf)
 		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
@@ -232,13 +284,45 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 				sj := simplejson.New()
 				sj.Set("cmd", CmdOnlineChange)
 				sj.Set("online", num3)
-				bili.callCmdHandlerChain(CmdOnlineChange, &Context{RoomID: bili.roomID, Msg: sj})
+				bili.callCmdHandlerChain(CmdOnlineChange, &Context{RoomID: bili.roomID, Msg: sj, Uname: bili.Name})
 			}
 		case 3, 4:
 			buf = make([]byte, bLen)
 			CatchAny(io.ReadAtLeast(bili.serverConn, buf, bLen))
-			messages := string(buf)
-			CatchAny(bili.parseDanMu(messages))
+			if ver == 2 {
+				offset := 0
+
+				b := bytes.NewReader(buf)
+				r, err := zlib.NewReader(b)
+				if err != nil {
+					CatchAny(err)
+				}
+
+				buff := new(strings.Builder)
+				_, err = io.Copy(buff, r)
+				if err != nil {
+					CatchAny(err)
+				}
+
+				messages := buff.String()
+
+				buf = []byte(messages)
+				for offset < len(buf) {
+					packetLenExp := binary.BigEndian.Uint32(buf[offset : offset+4])
+					packetLen := int(packetLenExp)
+					data := buf[offset+16 : offset+packetLen]
+
+					msg := string(data)
+					i := strings.Index(msg, "{")
+					if i >= 0 {
+						CatchAny(bili.parseDanMu(msg[i:]))
+					}
+					offset += packetLen
+				}
+			} else {
+				messages := string(buf)
+				CatchAny(bili.parseDanMu(messages))
+			}
 		case 5, 6, 7:
 			buf = make([]byte, bLen)
 			CatchAny(io.ReadAtLeast(bili.serverConn, buf, bLen))
@@ -258,6 +342,7 @@ func (bili *BiliBiliClient) parseDanMu(message string) (err error) {
 	}
 	cmd, err := dic.Get("cmd").String()
 	if err != nil {
+		err = nil
 		return
 	}
 	// 弹幕升级了，弹幕cmd获得的值不是DANMU_MSG, 而是DANMU_MSG: + 版本, 例如: DANMU_MSG:4:0:2:2:2:0
@@ -265,8 +350,8 @@ func (bili *BiliBiliClient) parseDanMu(message string) (err error) {
 	if strings.HasPrefix(cmd, string(CmdDanmuMsg)) {
 		cmd = string(CmdDanmuMsg)
 	}
-	bili.callCmdHandlerChain(CmdType(cmd), &Context{RoomID: bili.roomID, Msg: dic}) //call cmd handler chain
-	bili.callCmdHandlerChain("", &Context{RoomID: bili.roomID, Msg: dic})           //call default handler chain
+	bili.callCmdHandlerChain(CmdType(cmd), &Context{RoomID: bili.roomID, Msg: dic, Uname: bili.Name}) //call cmd handler chain
+	bili.callCmdHandlerChain("", &Context{RoomID: bili.roomID, Msg: dic, Uname: bili.Name})           //call default handler chain
 	return nil
 }
 func (bili *BiliBiliClient) callCmdHandlerChain(cmd CmdType, c *Context) {
