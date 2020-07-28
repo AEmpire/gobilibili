@@ -12,6 +12,7 @@ import (
 type Context struct {
 	Msg    *simplejson.Json
 	RoomID int
+	Uname  string
 }
 
 //DanmuInfo 弹幕信息
