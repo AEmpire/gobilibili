@@ -171,6 +171,10 @@ func (bili *BiliBiliClient) Disconnect() {
 	return
 }
 
+func (bili *BiliBiliClient) GetConnectStatus() bool {
+	return bili.connected
+}
+
 // ConnectServer define
 func (bili *BiliBiliClient) ConnectServer(roomID int) error {
 	log.Println("Getting real room ID ....")
