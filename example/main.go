@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/lyyyuna/gobilibili"
+	"github.com/AEmpire/gobilibili"
 )
 
 func main() {

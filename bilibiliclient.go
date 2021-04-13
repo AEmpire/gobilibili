@@ -10,13 +10,13 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"strings"
 
 	"time"
 
 	"github.com/bitly/go-simplejson"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -135,7 +135,7 @@ type BiliBiliClient struct {
 	ChatPort        int
 	protocolversion uint16
 	ChatHost        string
-	serverConn      net.Conn
+	serverConn      *websocket.Conn
 	uid             int
 	handlerMap      map[CmdType]([]Handler)
 	connected       bool
@@ -144,8 +144,8 @@ type BiliBiliClient struct {
 
 func NewBiliBiliClient() *BiliBiliClient {
 	bili := new(BiliBiliClient)
-	bili.ChatHost = "livecmt-1.bilibili.com"
-	bili.ChatPort = 788
+	bili.ChatHost = "broadcastlv.chat.bilibili.com"
+	bili.ChatPort = 443
 	bili.protocolversion = 1
 	bili.handlerMap = make(map[CmdType]([]Handler))
 	return bili
@@ -188,8 +188,8 @@ func (bili *BiliBiliClient) ConnectServer(roomID int) error {
 		return err
 	}
 	log.Println("Entering room ....")
-	dstAddr := fmt.Sprintf("%s:%d", bili.ChatHost, bili.ChatPort)
-	dstConn, err := net.Dial("tcp", dstAddr)
+	dstAddr := fmt.Sprintf("wss://%s:%d/sub", bili.ChatHost, bili.ChatPort)
+	dstConn, _, err := websocket.DefaultDialer.Dial(dstAddr, nil)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func (bili *BiliBiliClient) sendSocketData(packetlength uint32, magic uint16, ve
 		}
 	}
 	socketData := append(headerBytes.Bytes(), bodyBytes...)
-	_, err := bili.serverConn.Write(socketData)
+	err := bili.serverConn.WriteMessage(websocket.BinaryMessage, socketData)
 	return err
 }
 
@@ -261,17 +261,13 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 	})
 	var oldOnline uint32
 	for bili.connected {
-		buf := make([]byte, 4)
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
-		expr := binary.BigEndian.Uint32(buf)
-		buf = make([]byte, 2)
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 2))
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 2))
-		ver := binary.BigEndian.Uint16(buf)
-		buf = make([]byte, 4)
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
-		num := binary.BigEndian.Uint32(buf)
-		CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
+		_, msg, _ := bili.serverConn.ReadMessage()
+		if len(msg) == 0 {
+			continue
+		}
+		expr := binary.BigEndian.Uint32(msg[:4])
+		ver := binary.BigEndian.Uint16(msg[6:8])
+		num := binary.BigEndian.Uint32(msg[8:12])
 
 		bLen := int(expr - 16)
 		if bLen <= 0 {
@@ -280,9 +276,7 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 		num = num - 1
 		switch num {
 		case 0, 1, 2:
-			buf = make([]byte, 4)
-			CatchAny(io.ReadAtLeast(bili.serverConn, buf, 4))
-			num3 := binary.BigEndian.Uint32(buf)
+			num3 := binary.BigEndian.Uint32(msg[16:20])
 			if oldOnline != num3 {
 				oldOnline = num3
 				sj := simplejson.New()
@@ -291,8 +285,7 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 				bili.callCmdHandlerChain(CmdOnlineChange, &Context{RoomID: bili.roomID, Msg: sj, Uname: bili.Name})
 			}
 		case 3, 4:
-			buf = make([]byte, bLen)
-			CatchAny(io.ReadAtLeast(bili.serverConn, buf, bLen))
+			buf := msg[16:expr]
 			if ver == 2 {
 				offset := 0
 
@@ -328,12 +321,8 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 				CatchAny(bili.parseDanMu(messages))
 			}
 		case 5, 6, 7:
-			buf = make([]byte, bLen)
-			CatchAny(io.ReadAtLeast(bili.serverConn, buf, bLen))
 		case 16:
 		default:
-			buf = make([]byte, bLen)
-			CatchAny(io.ReadAtLeast(bili.serverConn, buf, bLen))
 		}
 	}
 	return nil
