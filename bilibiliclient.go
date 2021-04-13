@@ -148,6 +148,8 @@ func NewBiliBiliClient() *BiliBiliClient {
 	bili.ChatPort = 443
 	bili.protocolversion = 1
 	bili.handlerMap = make(map[CmdType]([]Handler))
+
+	fmt.Println(bili.ChatHost)
 	return bili
 }
 
