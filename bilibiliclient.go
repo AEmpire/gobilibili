@@ -145,7 +145,7 @@ type BiliBiliClient struct {
 func NewBiliBiliClient() *BiliBiliClient {
 	bili := new(BiliBiliClient)
 	bili.ChatHost = "broadcastlv.chat.bilibili.com"
-	bili.ChatPort = 2244
+	bili.ChatPort = 443
 	bili.protocolversion = 1
 	bili.handlerMap = make(map[CmdType]([]Handler))
 
@@ -189,7 +189,7 @@ func (bili *BiliBiliClient) ConnectServer(roomID int) error {
 		return err
 	}
 	log.Println("Entering room ....")
-	dstAddr := fmt.Sprintf("ws://%s:%d/sub", bili.ChatHost, bili.ChatPort)
+	dstAddr := fmt.Sprintf("wss://%s:%d/sub", bili.ChatHost, bili.ChatPort)
 	dstConn, _, err := websocket.DefaultDialer.Dial(dstAddr, nil)
 	if err != nil {
 		return err
