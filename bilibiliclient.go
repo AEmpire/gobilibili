@@ -214,9 +214,8 @@ func (bili *BiliBiliClient) heartbeatLoop() {
 		if err != nil {
 			bili.connected = false
 			log.Printf("heartbeatError:%s\r\n", err.Error())
-			return
 		}
-		time.Sleep(time.Second * 5)
+		time.Sleep(time.Second * 30)
 	}
 }
 
