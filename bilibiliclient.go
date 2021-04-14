@@ -263,11 +263,11 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 	var oldOnline uint32
 	for bili.connected {
 		_, msg, err := bili.serverConn.ReadMessage()
-		if len(msg) == 0 {
-			continue
-		}
 		if err != nil {
 			break
+		}
+		if len(msg) == 0 {
+			continue
 		}
 		expr := binary.BigEndian.Uint32(msg[:4])
 		ver := binary.BigEndian.Uint16(msg[6:8])
