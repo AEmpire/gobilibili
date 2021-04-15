@@ -263,7 +263,7 @@ func (bili *BiliBiliClient) receiveMessageLoop() (err error) {
 	for bili.connected {
 		_, msg, err := bili.serverConn.ReadMessage()
 		if err != nil {
-			break
+			return err
 		}
 		if len(msg) == 0 {
 			continue
