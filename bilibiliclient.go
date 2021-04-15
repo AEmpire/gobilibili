@@ -212,8 +212,8 @@ func (bili *BiliBiliClient) heartbeatLoop() {
 	for bili.connected {
 		err := bili.sendSocketData(0, 16, bili.protocolversion, 2, 1, "")
 		if err != nil {
-			bili.connected = false
 			log.Printf("heartbeatError:%s\r\n", err.Error())
+			return
 		}
 		time.Sleep(time.Second * 30)
 	}
